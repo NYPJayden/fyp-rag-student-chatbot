@@ -13,6 +13,10 @@ class RAGFlowClient:
         self.api_key = os.getenv("RAGFLOW_API_KEY")
         self.model = os.getenv("RAGFLOW_MODEL", "model")
 
+        self.ollama_refine_enabled = os.getenv("OLLAMA_REFINE_ENABLED", "false").lower() == "true"
+        self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        self.ollama_refine_model = os.getenv("OLLAMA_REFINE_MODEL", "gpt-oss:20b")
+
         if not self.chat_id:
             raise ValueError("RAGFLOW_CHAT_ID is missing from .env")
         if not self.api_key:
@@ -43,7 +47,13 @@ class RAGFlowClient:
             data = response.json()
 
             answer = data["choices"][0]["message"]["content"]
-            return self._clean_answer(answer)
+            cleaned_answer = self._clean_answer(answer)
+
+            if self.ollama_refine_enabled:
+                refined_answer = self._refine_with_ollama(question, cleaned_answer)
+                return self._clean_answer(refined_answer)
+
+            return cleaned_answer
 
         except requests.exceptions.RequestException as error:
             return (
@@ -57,11 +67,70 @@ class RAGFlowClient:
                 f"Error: {error}"
             )
 
+    def _refine_with_ollama(self, question: str, answer: str) -> str:
+        """
+        Uses Ollama/gpt-oss to rewrite the answer into a cleaner Telegram-friendly format.
+        If Ollama fails, the original cleaned answer is returned.
+        """
+        if not answer or "could not find this information" in answer.lower():
+            return answer
+
+        url = f"{self.ollama_base_url}/api/chat"
+
+        system_prompt = (
+            "You are refining answers for a Telegram chatbot about NYP Engineering diplomas. "
+            "Rewrite the given answer so it is short, clear, and easy for students to read. "
+            "Do not add new facts. Do not change numbers. Do not remove important warnings. "
+            "Do not include internal reasoning. Do not use Markdown tables. "
+            "Use simple plain text with short bullet points if useful."
+        )
+
+        user_prompt = (
+            f"User question:\n{question}\n\n"
+            f"Original answer:\n{answer}\n\n"
+            "Rewrite the answer for Telegram. Keep it accurate and easy to read."
+        )
+
+        payload = {
+            "model": self.ollama_refine_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                },
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.2,
+                "num_predict": 350,
+            },
+        }
+
+        try:
+            response = requests.post(url, json=payload, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+
+            refined = data["message"]["content"].strip()
+
+            if not refined:
+                return answer
+
+            return refined
+
+        except requests.exceptions.RequestException:
+            return answer
+
+        except (KeyError, TypeError):
+            return answer
+
     def _clean_answer(self, text: str) -> str:
         """
         Cleans RAGFlow/LLM output so it looks better in Telegram.
-        The goal is to remove confusing Markdown, HTML tags, tables,
-        and internal reasoning-style text.
         """
         if not text:
             return self._not_found_message()
@@ -113,30 +182,20 @@ class RAGFlowClient:
         cleaned = cleaned.replace("<br/>", "\n")
         cleaned = cleaned.replace("<br />", "\n")
 
-        # Remove any remaining HTML tags.
         cleaned = re.sub(r"<[^>]+>", "", cleaned)
 
         return cleaned
 
     def _convert_markdown_table(self, text: str) -> str:
-        """
-        Converts simple Markdown table rows into readable plain text.
-        Example:
-        | JAE ELR2B2-C | 6 to 12 points |
-        becomes:
-        JAE ELR2B2-C: 6 to 12 points
-        """
         lines = text.splitlines()
         converted_lines = []
 
         for line in lines:
             stripped = line.strip()
 
-            # Skip Markdown table separator lines such as |---|---|
             if re.fullmatch(r"\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?", stripped):
                 continue
 
-            # Convert Markdown table row
             if stripped.startswith("|") and stripped.endswith("|"):
                 cells = [cell.strip() for cell in stripped.strip("|").split("|")]
 
@@ -163,18 +222,14 @@ class RAGFlowClient:
     def _remove_markdown_symbols(self, text: str) -> str:
         cleaned = text
 
-        # Remove bold/italic markdown symbols
         cleaned = cleaned.replace("**", "")
         cleaned = cleaned.replace("__", "")
         cleaned = cleaned.replace("*", "")
 
-        # Convert headings into plain lines
         cleaned = re.sub(r"^\s*#{1,6}\s*", "", cleaned, flags=re.MULTILINE)
 
-        # Remove leftover table pipes
         cleaned = cleaned.replace("|", "")
 
-        # Remove markdown blockquotes
         cleaned = re.sub(r"^\s*>\s?", "", cleaned, flags=re.MULTILINE)
 
         return cleaned
@@ -182,13 +237,9 @@ class RAGFlowClient:
     def _clean_spacing(self, text: str) -> str:
         cleaned = text
 
-        # Remove extra spaces
         cleaned = re.sub(r"[ \t]+", " ", cleaned)
-
-        # Remove repeated blank lines
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
 
-        # Clean each line
         lines = [line.strip() for line in cleaned.splitlines()]
         cleaned = "\n".join(line for line in lines if line)
 
