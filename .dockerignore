@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.git/
+.gitignore
+README.md
+PROJECT_SETUP_EXPLANATION.md
