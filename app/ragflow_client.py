@@ -47,11 +47,11 @@ class RAGFlowClient:
             data = response.json()
 
             answer = data["choices"][0]["message"]["content"]
-            cleaned_answer = self._clean_answer(answer)
+            cleaned_answer = self._clean_answer(answer, question)
 
             if self.ollama_refine_enabled:
                 refined_answer = self._refine_with_ollama(question, cleaned_answer)
-                return self._clean_answer(refined_answer)
+                return self._clean_answer(refined_answer, question)
 
             return cleaned_answer
 
@@ -133,18 +133,22 @@ class RAGFlowClient:
         except (KeyError, TypeError):
             return answer
 
-    def _clean_answer(self, text: str) -> str:
+    def _clean_answer(
+        self,
+        text: str,
+        question: str | None = None,
+    ) -> str:
         """
-        Cleans RAGFlow/LLM output so it looks better in Telegram.
+        Cleans RAGFlow or LLM output so it looks better in Telegram.
         """
         if not text:
-            return self._not_found_message()
+            return self._not_found_message(question)
 
         cleaned = text.strip()
 
         if "The answer you are looking for is not found in the dataset" in cleaned:
-            return self._not_found_message()
-        
+            return self._not_found_message(question)
+
         cleaned = self._remove_reasoning_text(cleaned)
         cleaned = self._remove_internal_source_text(cleaned)
         cleaned = self._remove_html_tags(cleaned)
@@ -153,15 +157,53 @@ class RAGFlowClient:
         cleaned = self._clean_spacing(cleaned)
 
         if not cleaned:
-            return self._not_found_message()
+            return self._not_found_message(question)
 
         return cleaned
 
-    def _not_found_message(self) -> str:
+    def _not_found_message(self, question: str | None = None) -> str:
+        """
+        Returns a more useful fallback based on the user's question.
+        """
+        normalised_question = (question or "").lower()
+
+        fee_terms = [
+            "course fee",
+            "course fees",
+            "tuition fee",
+            "tuition fees",
+            "school fee",
+            "fees payable",
+        ]
+
+        graduation_terms = [
+            "credit",
+            "credits",
+            "graduate",
+            "graduation requirement",
+            "graduation requirements",
+        ]
+
+        if any(term in normalised_question for term in fee_terms):
+            return (
+                "I could not find the exact course fee information in the current "
+                "diploma knowledge base.\n\n"
+                "Please check the official NYP fees or admissions page for the "
+                "latest payable amount."
+            )
+
+        if any(term in normalised_question for term in graduation_terms):
+            return (
+                "I could not find the exact graduation credit requirements in the "
+                "current diploma knowledge base.\n\n"
+                "Please check the official NYP course handbook or academic "
+                "regulations for the confirmed requirements."
+            )
+
         return (
             "I could not find this information in the current diploma knowledge base.\n\n"
-            "Please check the official NYP website, admissions page, or course handbook "
-            "for the most updated information."
+            "Please check the official NYP website, admissions page, or course "
+            "handbook for the most updated information."
         )
 
     def _remove_reasoning_text(self, text: str) -> str:
