@@ -80,8 +80,13 @@ class RAGFlowClient:
         system_prompt = (
             "You are refining answers for a Telegram chatbot about NYP Engineering diplomas. "
             "Rewrite the given answer so it is short, clear, and easy for students to read. "
-            "Do not add new facts. Do not change numbers. Do not remove important warnings. "
-            "Do not include internal reasoning. Do not use Markdown tables. "
+            "Do not add new facts and do not change any numbers. "
+            "Do not remove important warnings. "
+            "Do not include internal reasoning or Markdown tables. "
+            "Never include source IDs, chunk IDs, document IDs, filenames, Markdown filenames, "
+            "underscored file names, or internal references such as ID 0 or C87_Robotics_and_Mechatronics. "
+            "Use only the proper public diploma name and course code, such as "
+            "Robotics & Mechatronics (C87). "
             "Use simple plain text with short bullet points if useful."
         )
 
@@ -139,8 +144,9 @@ class RAGFlowClient:
 
         if "The answer you are looking for is not found in the dataset" in cleaned:
             return self._not_found_message()
-
+        
         cleaned = self._remove_reasoning_text(cleaned)
+        cleaned = self._remove_internal_source_text(cleaned)
         cleaned = self._remove_html_tags(cleaned)
         cleaned = self._convert_markdown_table(cleaned)
         cleaned = self._remove_markdown_symbols(cleaned)
@@ -174,6 +180,40 @@ class RAGFlowClient:
             cleaned = re.sub(pattern, "", cleaned).strip()
 
         return cleaned
+    
+    def _remove_internal_source_text(self, text: str) -> str:
+        """
+        Removes internal RAGFlow references, document IDs,
+        chunk IDs and Markdown filenames from the answer.
+        """
+        cleaned = text
+
+        patterns = [
+            # Example: ID 0 - "C87_Robotics_and_Mechatronics"
+            r'(?i)\(?\s*ID\s*\d+\s*[-–—:]\s*["“”\']?'
+            r'[A-Z]\d{2}_[A-Za-z0-9_]+(?:\.md)?["“”\']?\s*\)?',
+
+            # Example: C87_Robotics_and_Mechatronics_17_Recommended_Interests
+            r'(?i)\b[A-Z]\d{2}_[A-Za-z0-9_]+(?:\.md)?\b',
+
+            # Example: source ID 3, chunk ID 5, document 2
+            r'(?i)\b(?:source|document|file|chunk)\s*'
+            r'(?:id)?\s*[:#-]?\s*\d+\b',
+
+            # Remove remaining standalone ID numbers
+            r'(?i)\bID\s*\d+\b',
+        ]
+
+        for pattern in patterns:
+            cleaned = re.sub(pattern, "", cleaned)
+
+        # Clean brackets or punctuation left after removal.
+        cleaned = re.sub(r"\(\s*\)", "", cleaned)
+        cleaned = re.sub(r"\[\s*\]", "", cleaned)
+        cleaned = re.sub(r"\s+([,.;:])", r"\1", cleaned)
+
+        return cleaned
+
 
     def _remove_html_tags(self, text: str) -> str:
         cleaned = text
