@@ -1,8 +1,10 @@
 import os
 import re
+import asyncio
 
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -241,11 +243,16 @@ async def handle_message(
             diploma,
         )
 
-        await update.message.reply_text(
-            "Searching the diploma knowledge base..."
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action=ChatAction.TYPING,
         )
 
-        answer = ragflow.ask(combined_question)
+        answer = await asyncio.to_thread(
+            ragflow.ask,
+            combined_question,
+        )
+
         await send_answer(update, answer)
         return
 
@@ -261,11 +268,16 @@ async def handle_message(
         return
 
     # Normal one-message question.
-    await update.message.reply_text(
-        "Searching the diploma knowledge base..."
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING,
     )
 
-    answer = ragflow.ask(user_question)
+    answer = await asyncio.to_thread(
+        ragflow.ask,
+        user_question,
+    )
+
     await send_answer(update, answer)
 
 
