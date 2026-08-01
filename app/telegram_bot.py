@@ -66,6 +66,27 @@ DIPLOMA_ALIASES = {
     ],
 }
 
+OUT_OF_SCOPE_TERMS = [
+    "free food",
+    "food",
+    "weather",
+    "president",
+    "football",
+    "sports score",
+    "stock price",
+    "recipe",
+    "movie recommendation",
+]
+
+
+def is_obviously_out_of_scope(question: str) -> bool:
+    normalised = normalise_text(question)
+
+    return any(
+        normalise_text(term) in normalised
+        for term in OUT_OF_SCOPE_TERMS
+    )
+
 
 def normalise_text(text: str) -> str:
     """Converts text into a simpler form for matching."""
@@ -210,6 +231,31 @@ async def cancel(
         )
 
 
+async def get_answer_with_timeout(question: str) -> str:
+    """
+    Prevents one slow RAGFlow request from freezing the Telegram bot.
+    """
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(ragflow.ask, question),
+            timeout=45,
+        )
+
+    except asyncio.TimeoutError:
+        return (
+            "The diploma knowledge base took too long to respond.\n\n"
+            "Please try again, or check the official NYP website for "
+            "the latest information."
+        )
+
+    except Exception as error:
+        print(f"Chatbot request failed: {error}", flush=True)
+
+        return (
+            "Sorry, I could not process the question right now. "
+            "Please try again later."
+        )
+
 async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -248,12 +294,18 @@ async def handle_message(
             action=ChatAction.TYPING,
         )
 
-        answer = await asyncio.to_thread(
-            ragflow.ask,
-            combined_question,
-        )
+        answer = await get_answer_with_timeout(combined_question)
 
         await send_answer(update, answer)
+        return
+
+    if is_obviously_out_of_scope(user_question):
+        await update.message.reply_text(
+            "I could not find this information in the current "
+            "diploma knowledge base.\n\n"
+            "I can help with NYP Engineering diploma information, "
+            "comparisons, admission ranges and career pathways."
+        )
         return
 
     # The question needs a diploma name before it can be answered.
@@ -273,10 +325,7 @@ async def handle_message(
         action=ChatAction.TYPING,
     )
 
-    answer = await asyncio.to_thread(
-        ragflow.ask,
-        user_question,
-    )
+    answer = await get_answer_with_timeout(user_question)
 
     await send_answer(update, answer)
 
